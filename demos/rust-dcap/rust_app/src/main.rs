@@ -1,8 +1,8 @@
 extern crate occlum_dcap;
-use core::convert::TryFrom;
-use occlum_dcap::*;
-use std::io::Result;
 use std::str;
+use std::io::Result;
+use std::convert::TryFrom;
+use occlum_dcap::*;
 
 struct DcapDemo {
     dcap_quote: DcapQuote,
@@ -10,11 +10,11 @@ struct DcapDemo {
     quote_buf: Vec<u8>,
     req_data: sgx_report_data_t,
     supplemental_size: u32,
-    suppl_buf: Vec<u8>,
+    suppl_buf: Vec<u8>
 }
 
 impl DcapDemo {
-    pub fn new(report_data: Vec<u8>) -> Self {
+    pub fn new(report_data: &str) -> Self {
         let mut dcap = DcapQuote::new();
         let quote_size = dcap.get_quote_size();
         let supplemental_size = dcap.get_supplemental_data_size();
@@ -23,7 +23,7 @@ impl DcapDemo {
         let mut req_data = sgx_report_data_t::default();
 
         //fill in the report data array
-        for (pos, val) in report_data.iter().enumerate() {
+        for (pos, val) in report_data.as_bytes().iter().enumerate() {
             req_data.d[pos] = *val;
         }
 
@@ -33,18 +33,16 @@ impl DcapDemo {
             quote_buf: quote_buf,
             req_data: req_data,
             supplemental_size: supplemental_size,
-            suppl_buf: suppl_buf,
+            suppl_buf: suppl_buf
         }
     }
 
     fn dcap_quote_gen(&mut self) -> Result<i32> {
-        self.dcap_quote
-            .generate_quote(self.quote_buf.as_mut_ptr(), &mut self.req_data)
-            .unwrap();
+        self.dcap_quote.generate_quote(self.quote_buf.as_mut_ptr(), &mut self.req_data).unwrap();
 
         println!("DCAP generate quote successfully");
 
-        Ok(0)
+        Ok( 0 )
     }
 
     // Quote has type `sgx_quote3_t` and is structured as
@@ -57,8 +55,8 @@ impl DcapDemo {
 
     fn dcap_quote_get_report_body(&mut self) -> Result<*const sgx_report_body_t> {
         let report_body_offset = std::mem::size_of::<sgx_quote_header_t>();
-        let report_body: *const sgx_report_body_t =
-            (self.quote_buf[report_body_offset..]).as_ptr() as _;
+        let report_body: *const sgx_report_body_t
+            = (self.quote_buf[report_body_offset..]).as_ptr() as _;
 
         Ok(report_body)
     }
@@ -86,7 +84,7 @@ impl DcapDemo {
         self.dcap_quote.verify_quote(&mut verify_arg).unwrap();
         println!("DCAP verify quote successfully");
 
-        Ok(quote_verification_result)
+        Ok( quote_verification_result )
     }
 
     fn dcap_dump_quote_info(&mut self) {
@@ -134,26 +132,16 @@ impl Drop for DcapDemo {
     }
 }
 
-pub fn get_fingerprint() -> sgx_key_128bit_t {
-    let report_str = "GET KEY";
-    let mut dcap_demo = DcapDemo::new(report_str.as_bytes().to_vec());
-    println!("Generate quote with report data : {:?}", report_str);
-    dcap_demo.dcap_quote_gen().unwrap();
-    let report = dcap_demo.dcap_quote_get_report_body().unwrap();
-
-    get_key(report,2u16)
-}
-
 fn main() {
     let report_str = "Dcap demo sample";
-    let mut dcap_demo = DcapDemo::new(report_str.as_bytes().to_vec());
+    let mut dcap_demo = DcapDemo::new(report_str);
 
-    println!("Generate quote with report data : {:?}", report_str);
+    println!("Generate quote with report data : {}", report_str);
     dcap_demo.dcap_quote_gen().unwrap();
 
     // compare the report data in quote buffer
     let report_data_ptr = dcap_demo.dcap_quote_get_report_data().unwrap();
-    let string = str::from_utf8(unsafe { &(*report_data_ptr).d }).unwrap();
+    let string = str::from_utf8( unsafe { &(*report_data_ptr).d } ).unwrap();
 
     if report_str == &string[..report_str.len()] {
         println!("Report data from Quote: '{}' exactly matches.", string);
@@ -167,23 +155,15 @@ fn main() {
     match result {
         sgx_ql_qv_result_t::SGX_QL_QV_RESULT_OK => {
             println!("Succeed to verify the quote!");
-        }
-        sgx_ql_qv_result_t::SGX_QL_QV_RESULT_CONFIG_NEEDED
-        | sgx_ql_qv_result_t::SGX_QL_QV_RESULT_OUT_OF_DATE
-        | sgx_ql_qv_result_t::SGX_QL_QV_RESULT_OUT_OF_DATE_CONFIG_NEEDED
-        | sgx_ql_qv_result_t::SGX_QL_QV_RESULT_SW_HARDENING_NEEDED
-        | sgx_ql_qv_result_t::SGX_QL_QV_RESULT_CONFIG_AND_SW_HARDENING_NEEDED => {
-            println!(
-                "WARN: App: Verification completed with Non-terminal result: {:?}",
-                result
-            );
-        }
-        _ => println!(
-            "Error: App: Verification completed with Terminal result: {:?}",
-            result
-        ),
+        },
+        sgx_ql_qv_result_t::SGX_QL_QV_RESULT_CONFIG_NEEDED |
+        sgx_ql_qv_result_t::SGX_QL_QV_RESULT_OUT_OF_DATE |
+        sgx_ql_qv_result_t::SGX_QL_QV_RESULT_OUT_OF_DATE_CONFIG_NEEDED |
+        sgx_ql_qv_result_t::SGX_QL_QV_RESULT_SW_HARDENING_NEEDED |
+        sgx_ql_qv_result_t::SGX_QL_QV_RESULT_CONFIG_AND_SW_HARDENING_NEEDED => {
+            println!("WARN: App: Verification completed with Non-terminal result: {:?}", result);
+        },
+        _ => println!("Error: App: Verification completed with Terminal result: {:?}", result),
     }
 
-    let fingerprint = get_fingerprint();
-    println!("fingerprint {:?}", fingerprint);
 }

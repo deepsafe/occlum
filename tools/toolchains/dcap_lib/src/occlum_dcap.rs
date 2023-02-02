@@ -1,5 +1,6 @@
-use std::ffi::CString;
 use crate::prelude::*;
+use std::ffi::CString;
+use sgx_types::{FLAGS_NON_SECURITY_BITS, SGX_KEYPOLICY_CONFIGID, SGX_KEYPOLICY_ISVEXTPRODID, SGX_KEYPOLICY_ISVFAMILYID, SGX_KEYPOLICY_NOISVPRODID, SGX_KEYSELECT_LICENSE, SGX_KEYSELECT_PROVISION, SGX_KEYSELECT_PROVISION_SEAL, SGX_KEYSELECT_REPORT};
 
 const SGXIOC_GET_DCAP_QUOTE_SIZE: u64 = 0x80047307;
 const SGXIOC_GEN_DCAP_QUOTE: u64 = 0xc0187308;
@@ -19,7 +20,6 @@ cfg_if::cfg_if! {
         const IOCTL_VER_DCAP_QUOTE: u64 = SGXIOC_VER_DCAP_QUOTE;
     }
 }
-
 
 // Copy from occlum/src/libos/src/fs/dev_fs/dev_sgx/mod.rs
 //#[allow(dead_code)]
@@ -50,7 +50,7 @@ pub struct DcapQuote {
 
 impl DcapQuote {
     pub fn new() -> Self {
-        let path =  CString::new("/dev/sgx").unwrap();
+        let path = CString::new("/dev/sgx").unwrap();
         let fd = unsafe { libc::open(path.as_ptr(), O_RDONLY) };
         if fd > 0 {
             Self {
@@ -74,7 +74,11 @@ impl DcapQuote {
         }
     }
 
-    pub fn generate_quote(&mut self, quote_buf: *mut u8,  report_data: *const sgx_report_data_t) -> Result<i32, &'static str> {
+    pub fn generate_quote(
+        &mut self,
+        quote_buf: *mut u8,
+        report_data: *const sgx_report_data_t,
+    ) -> Result<i32, &'static str> {
         let quote_arg: IoctlGenDCAPQuoteArg = IoctlGenDCAPQuoteArg {
             report_data: report_data,
             quote_size: &mut self.quote_size,
@@ -85,7 +89,7 @@ impl DcapQuote {
         if ret < 0 {
             Err("IOCTRL IOCTL_GEN_DCAP_QUOTE failed")
         } else {
-            Ok( 0 )
+            Ok(0)
         }
     }
 
@@ -100,13 +104,16 @@ impl DcapQuote {
         }
     }
 
-    pub fn verify_quote(&mut self, verify_arg: *mut IoctlVerDCAPQuoteArg) -> Result<i32, &'static str> {
+    pub fn verify_quote(
+        &mut self,
+        verify_arg: *mut IoctlVerDCAPQuoteArg,
+    ) -> Result<i32, &'static str> {
         let ret = unsafe { libc::ioctl(self.fd, IOCTL_VER_DCAP_QUOTE, verify_arg) };
         if ret < 0 {
             println!("ret = {}", ret);
             Err("IOCTRL IOCTL_VER_DCAP_QUOTE failed")
         } else {
-            Ok( 0 )
+            Ok(0)
         }
     }
 
@@ -115,3 +122,150 @@ impl DcapQuote {
     }
 }
 
+const SGXIOC_GET_KEY: u64 = 0xc010730b; //c010730b
+
+cfg_if::cfg_if! {
+    if #[cfg(target_env = "musl")] {
+        const IOCTL_GET_KEY: i32 = SGXIOC_GET_KEY as i32;
+    } else {
+        const IOCTL_GET_KEY: u64 = SGXIOC_GET_KEY;
+    }
+}
+
+#[repr(C)]
+pub struct IoctlGetKeyArg {
+    key_request: *const sgx_key_request_t, // Input
+    key: *mut sgx_key_128bit_t,            // Output
+}
+
+pub struct GETKEY {
+    fd: c_int,
+}
+
+impl GETKEY {
+    pub fn new() -> Self {
+        let path = CString::new("/dev/sgx").unwrap();
+        let fd = unsafe { libc::open(path.as_ptr(), O_RDONLY) };
+        if fd > 0 {
+            Self { fd: fd }
+        } else {
+            panic!("Open /dev/sgx failed")
+        }
+    }
+
+    pub fn get_key(
+        &mut self,
+        request: *const sgx_key_request_t,
+    ) -> Result<sgx_key_128bit_t, &'static str> {
+        let mut key: sgx_key_128bit_t = [0u8; 16];
+
+        let key_args: IoctlGetKeyArg = IoctlGetKeyArg {
+            key_request: request,
+            key: &mut key,
+        };
+
+        let ret = unsafe { libc::ioctl(self.fd, IOCTL_GET_KEY, &key_args) };
+        if ret < 0 {
+            Err("IOCTRL IOCTL_GET_KEY failed")
+        } else {
+            Ok(key)
+        }
+    }
+}
+
+pub fn get_key(report: *const sgx_report_body_t, key_policy: u16) -> sgx_key_128bit_t {
+    let mut get_key = GETKEY::new();
+
+    let attribute_mask = sgx_attributes_t {
+        flags: TSEAL_DEFAULT_FLAGSMASK,
+        xfrm: 0,
+    };
+    // hack the key_id
+    let key_id = sgx_key_id_t {
+        id: [0u8; SGX_KEYID_SIZE],
+    };
+    let key_policy: u16 = match key_policy {
+        1u16 => SGX_KEYPOLICY_MRENCLAVE,
+        _ => SGX_KEYPOLICY_MRSIGNER
+    };
+
+    let mut key_request = sgx_key_request_t {
+        key_name: SGX_KEYSELECT_SEAL,
+        key_policy,
+        isv_svn: 0u16,
+        reserved1: 0u16,
+        cpu_svn: unsafe { (*report).cpu_svn },
+        attribute_mask,
+        key_id,
+        misc_mask: TSEAL_DEFAULT_MISCMASK,
+        config_svn: 0u16,
+        reserved2: [0u8; SGX_KEY_REQUEST_RESERVED2_BYTES],
+    };
+
+    let key = get_key.get_key(&mut key_request).unwrap();
+    key
+}
+
+pub fn get_key_with_setting(report: *const sgx_report_body_t, key_name: u16, key_policy: u16, flag: u16) -> sgx_key_128bit_t {
+    let mut get_key = GETKEY::new();
+
+    let attribute_mask = match flag {
+         0 => sgx_attributes_t {
+            flags: TSEAL_DEFAULT_FLAGSMASK,
+            xfrm: 0,
+        },
+        1 => sgx_attributes_t {
+            flags: FLAGS_NON_SECURITY_BITS,
+            xfrm: 0,
+        },
+        _ => sgx_attributes_t {
+            flags: TSEAL_DEFAULT_FLAGSMASK,
+            xfrm: 0,
+        },
+    };
+
+    // hack the key_id
+    let key_id = sgx_key_id_t {
+        id: [0u8; SGX_KEYID_SIZE],
+    };
+
+    let key_name: u16 = match key_name {
+        0u16 => SGX_KEYSELECT_LICENSE,
+        1u16 => SGX_KEYSELECT_PROVISION,
+        2u16 => SGX_KEYSELECT_PROVISION_SEAL,
+        3u16 => SGX_KEYSELECT_REPORT,
+        4u16 => SGX_KEYSELECT_SEAL,
+        _ => SGX_KEYSELECT_SEAL,
+    };
+
+    let key_policy: u16 = match key_policy {
+        1u16 => SGX_KEYPOLICY_MRENCLAVE,
+        2u16 => SGX_KEYPOLICY_MRSIGNER,
+        4u16 => SGX_KEYPOLICY_NOISVPRODID,
+        8u16 => SGX_KEYPOLICY_CONFIGID,
+        10u16 => SGX_KEYPOLICY_ISVFAMILYID,
+        20u16 => SGX_KEYPOLICY_ISVEXTPRODID,
+        _ => SGX_KEYPOLICY_MRENCLAVE,
+    };
+
+    let mut key_request = sgx_key_request_t {
+        key_name,
+        key_policy,
+        isv_svn: 0u16,
+        reserved1: 0u16,
+        cpu_svn: unsafe { (*report).cpu_svn },
+        attribute_mask,
+        key_id,
+        misc_mask: MISC_NON_SECURITY_BITS,
+        config_svn: 0u16,
+        reserved2: [0u8; SGX_KEY_REQUEST_RESERVED2_BYTES],
+    };
+
+    let key = get_key.get_key(&mut key_request);
+    println!("====get_key_with_setting====");
+    if key.is_ok(){
+        key.unwrap()
+    }else {
+        sgx_key_128bit_t::default()
+    }
+}
